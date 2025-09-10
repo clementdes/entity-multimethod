@@ -1,0 +1,9 @@
+streamlit
+trafilatura
+spacy
+transformers
+torch
+sentencepiece
+flair
+sentence-transformers
+scikit-learn
