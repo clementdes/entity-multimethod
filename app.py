@@ -3,17 +3,46 @@ import io
 import json
 import numpy as np
 import pandas as pd
-import trafilatura
 import streamlit as st
 
-import spacy
-from transformers import AutoTokenizer, AutoModelForTokenClassification
-from transformers import pipeline as hf_pipeline
-from flair.data import Sentence
-from flair.models import SequenceTagger
+# Imports conditionnels avec gestion d'erreurs
+try:
+    import trafilatura
+    HAS_TRAFILATURA = True
+except ImportError:
+    HAS_TRAFILATURA = False
+    st.error("Trafilatura non disponible")
 
-from sentence_transformers import SentenceTransformer, util
-from sklearn.cluster import AgglomerativeClustering
+try:
+    import spacy
+    HAS_SPACY = True
+except ImportError:
+    HAS_SPACY = False
+    st.error("spaCy non disponible")
+
+try:
+    from transformers import AutoTokenizer, AutoModelForTokenClassification
+    from transformers import pipeline as hf_pipeline
+    HAS_TRANSFORMERS = True
+except ImportError:
+    HAS_TRANSFORMERS = False
+    st.error("Transformers non disponible")
+
+try:
+    from flair.data import Sentence
+    from flair.models import SequenceTagger
+    HAS_FLAIR = True
+except ImportError:
+    HAS_FLAIR = False
+    st.error("Flair non disponible")
+
+try:
+    from sentence_transformers import SentenceTransformer, util
+    from sklearn.cluster import AgglomerativeClustering
+    HAS_SENTENCE_TRANSFORMERS = True
+except ImportError:
+    HAS_SENTENCE_TRANSFORMERS = False
+    st.error("Sentence Transformers non disponible")
 
 # --------------------------
 # Config Streamlit
@@ -25,29 +54,70 @@ st.markdown(
     "**Embeddings sémantiques**, puis **fusionne et regroupe** les entités par **similarité sémantique**."
 )
 
+# Vérification des dépendances
+missing_deps = []
+if not HAS_TRAFILATURA:
+    missing_deps.append("trafilatura")
+if not HAS_SPACY:
+    missing_deps.append("spacy")
+if not HAS_TRANSFORMERS:
+    missing_deps.append("transformers")
+if not HAS_FLAIR:
+    missing_deps.append("flair")
+if not HAS_SENTENCE_TRANSFORMERS:
+    missing_deps.append("sentence-transformers")
+
+if missing_deps:
+    st.warning(f"Dépendances manquantes: {', '.join(missing_deps)}. Certaines fonctionnalités seront désactivées.")
+
 # --------------------------
 # Modèles (mis en cache)
 # --------------------------
 @st.cache_resource
 def load_spacy():
-    return spacy.load("fr_core_news_lg")
+    if not HAS_SPACY:
+        return None
+    try:
+        return spacy.load("fr_core_news_lg")
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de spaCy: {e}")
+        return None
 
 @st.cache_resource
 def load_camembert():
-    model_name = "Jean-Baptiste/camembert-ner"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForTokenClassification.from_pretrained(model_name)
-    return hf_pipeline("ner", model=model, tokenizer=tokenizer, grouped_entities=True)
+    if not HAS_TRANSFORMERS:
+        return None
+    try:
+        model_name = "Jean-Baptiste/camembert-ner"
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForTokenClassification.from_pretrained(model_name)
+        return hf_pipeline("ner", model=model, tokenizer=tokenizer, grouped_entities=True)
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de CamemBERT: {e}")
+        return None
 
 @st.cache_resource
 def load_flair():
-    return SequenceTagger.load("ner")
+    if not HAS_FLAIR:
+        return None
+    try:
+        return SequenceTagger.load("ner")
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de Flair: {e}")
+        return None
 
 @st.cache_resource
 def load_embeddings_model():
-    # Multilingue, léger et efficace pour la similarité
-    return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    if not HAS_SENTENCE_TRANSFORMERS:
+        return None
+    try:
+        # Modèle plus léger pour éviter les problèmes de mémoire
+        return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    except Exception as e:
+        st.error(f"Erreur lors du chargement du modèle d'embeddings: {e}")
+        return None
 
+# Chargement des modèles
 nlp_spacy = load_spacy()
 camembert_ner = load_camembert()
 flair_tagger = load_flair()
@@ -105,24 +175,39 @@ def extract_with_regex(text):
 
 def extract_with_spacy(text):
     """Extraction avec spaCy"""
-    doc = nlp_spacy(text)
-    entities = []
+    if not nlp_spacy:
+        return []
     
-    for ent in doc.ents:
-        entities.append({
-            "text": ent.text,
-            "label": ent.label_,
-            "start": ent.start_char,
-            "end": ent.end_char,
-            "confidence": float(ent._.get("confidence", 0.9)),
-            "method": "spaCy"
-        })
-    
-    return entities
+    try:
+        doc = nlp_spacy(text)
+        entities = []
+        
+        for ent in doc.ents:
+            entities.append({
+                "text": ent.text,
+                "label": ent.label_,
+                "start": ent.start_char,
+                "end": ent.end_char,
+                "confidence": 0.9,  # spaCy ne fournit pas toujours un score
+                "method": "spaCy"
+            })
+        
+        return entities
+    except Exception as e:
+        st.error(f"Erreur spaCy: {e}")
+        return []
 
 def extract_with_camembert(text):
     """Extraction avec CamemBERT"""
+    if not camembert_ner:
+        return []
+    
     try:
+        # Limiter la taille du texte pour éviter les erreurs de mémoire
+        max_length = 512
+        if len(text) > max_length:
+            text = text[:max_length]
+        
         results = camembert_ner(text)
         entities = []
         
@@ -143,7 +228,15 @@ def extract_with_camembert(text):
 
 def extract_with_flair(text):
     """Extraction avec Flair"""
+    if not flair_tagger:
+        return []
+    
     try:
+        # Limiter la taille du texte
+        max_length = 512
+        if len(text) > max_length:
+            text = text[:max_length]
+        
         sentence = Sentence(text)
         flair_tagger.predict(sentence)
         entities = []
@@ -165,53 +258,59 @@ def extract_with_flair(text):
 
 def extract_with_embeddings(text, similarity_threshold=0.75):
     """Extraction par similarité sémantique avec des entités connues"""
+    if not embedding_model:
+        return []
     
-    # Base d'entités connues par catégorie
-    known_entities = {
-        "PERSON": ["Emmanuel Macron", "Marine Le Pen", "Jean Dupont", "Marie Martin"],
-        "ORG": ["Google", "Microsoft", "Total", "SNCF", "EDF", "Orange"],
-        "LOC": ["Paris", "France", "Europe", "Amérique", "Lyon", "Marseille"],
-        "MISC": ["COVID-19", "Intelligence artificielle", "Blockchain", "5G"]
-    }
-    
-    entities = []
-    
-    # Découper le texte en phrases/segments
-    sentences = re.split(r'[.!?]+', text)
-    
-    for sentence in sentences:
-        if len(sentence.strip()) < 10:
-            continue
-            
-        # Extraire les mots/phrases candidates (capitalisés ou expressions)
-        candidates = re.findall(r'\b[A-ZÀ-ÿ][a-zà-ÿ]*(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]*)*', sentence)
+    try:
+        # Base d'entités connues par catégorie
+        known_entities = {
+            "PERSON": ["Emmanuel Macron", "Marine Le Pen", "Jean Dupont", "Marie Martin"],
+            "ORG": ["Google", "Microsoft", "Total", "SNCF", "EDF", "Orange"],
+            "LOC": ["Paris", "France", "Europe", "Amérique", "Lyon", "Marseille"],
+            "MISC": ["COVID-19", "Intelligence artificielle", "Blockchain", "5G"]
+        }
         
-        for candidate in candidates:
-            if len(candidate) < 3:
+        entities = []
+        
+        # Découper le texte en phrases/segments
+        sentences = re.split(r'[.!?]+', text)
+        
+        for sentence in sentences[:5]:  # Limiter le nombre de phrases
+            if len(sentence.strip()) < 10:
                 continue
                 
-            candidate_embedding = embedding_model.encode([candidate])
+            # Extraire les mots/phrases candidates (capitalisés ou expressions)
+            candidates = re.findall(r'\b[A-ZÀ-ÿ][a-zà-ÿ]*(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]*)*', sentence)
             
-            # Comparer avec les entités connues
-            for label, known_list in known_entities.items():
-                known_embeddings = embedding_model.encode(known_list)
-                similarities = util.cos_sim(candidate_embedding, known_embeddings)
-                max_similarity = float(similarities.max())
+            for candidate in candidates[:10]:  # Limiter le nombre de candidats
+                if len(candidate) < 3:
+                    continue
+                    
+                candidate_embedding = embedding_model.encode([candidate])
                 
-                if max_similarity > similarity_threshold:
-                    start_pos = text.find(candidate)
-                    if start_pos != -1:
-                        entities.append({
-                            "text": candidate,
-                            "label": label,
-                            "start": start_pos,
-                            "end": start_pos + len(candidate),
-                            "confidence": max_similarity,
-                            "method": "Embeddings"
-                        })
-                    break
-    
-    return entities
+                # Comparer avec les entités connues
+                for label, known_list in known_entities.items():
+                    known_embeddings = embedding_model.encode(known_list)
+                    similarities = util.cos_sim(candidate_embedding, known_embeddings)
+                    max_similarity = float(similarities.max())
+                    
+                    if max_similarity > similarity_threshold:
+                        start_pos = text.find(candidate)
+                        if start_pos != -1:
+                            entities.append({
+                                "text": candidate,
+                                "label": label,
+                                "start": start_pos,
+                                "end": start_pos + len(candidate),
+                                "confidence": max_similarity,
+                                "method": "Embeddings"
+                            })
+                        break
+        
+        return entities
+    except Exception as e:
+        st.error(f"Erreur Embeddings: {e}")
+        return []
 
 # --------------------------
 # Fusion et déduplication
@@ -228,7 +327,7 @@ def merge_entities(all_entities, similarity_threshold=0.8):
     # Supprimer les doublons exacts
     df = df.drop_duplicates(subset=['text', 'label'])
     
-    # Regrouper par similarité textuelle et sémantique
+    # Regrouper par similarité textuelle simple
     merged_entities = []
     processed_indices = set()
     
@@ -243,20 +342,11 @@ def merge_entities(all_entities, similarity_threshold=0.8):
             if j <= i or j in processed_indices:
                 continue
                 
-            # Similarité textuelle (Levenshtein simplifié)
+            # Similarité textuelle simple
             text_similarity = calculate_text_similarity(entity['text'], other_entity['text'])
             
-            # Similarité sémantique
-            semantic_similarity = 0.0
-            try:
-                embeddings = embedding_model.encode([entity['text'], other_entity['text']])
-                semantic_similarity = float(util.cos_sim(embeddings[0:1], embeddings[1:2]).item())
-            except:
-                pass
-            
             # Si suffisamment similaire, grouper
-            if (text_similarity > similarity_threshold or 
-                semantic_similarity > similarity_threshold) and entity['label'] == other_entity['label']:
+            if text_similarity > similarity_threshold and entity['label'] == other_entity['label']:
                 similar_group.append(other_entity)
                 processed_indices.add(j)
         
@@ -284,7 +374,7 @@ def calculate_text_similarity(text1, text2):
     intersection = words1.intersection(words2)
     union = words1.union(words2)
     
-    return len(intersection) / len(union)
+    return len(intersection) / len(union) if union else 0.0
 
 def create_merged_entity(entity_group):
     """Crée une entité fusionnée à partir d'un groupe d'entités similaires"""
@@ -320,51 +410,56 @@ def create_merged_entity(entity_group):
 
 def cluster_entities(entities, n_clusters=None):
     """Regroupe les entités par similarité sémantique"""
-    if len(entities) < 2:
+    if not HAS_SENTENCE_TRANSFORMERS or not embedding_model or len(entities) < 2:
         return entities, []
     
-    # Extraire les textes
-    texts = [entity['text'] for entity in entities]
-    
-    # Calculer les embeddings
-    embeddings = embedding_model.encode(texts)
-    
-    # Clustering hiérarchique
-    if n_clusters is None:
-        # Déterminer automatiquement le nombre de clusters
-        n_clusters = min(max(2, len(entities) // 3), 10)
-    
-    clustering = AgglomerativeClustering(
-        n_clusters=n_clusters, 
-        metric='cosine', 
-        linkage='average'
-    )
-    
-    cluster_labels = clustering.fit_predict(embeddings)
-    
-    # Ajouter les labels de cluster aux entités
-    clustered_entities = []
-    for entity, cluster_id in zip(entities, cluster_labels):
-        entity_copy = entity.copy()
-        entity_copy['cluster'] = int(cluster_id)
-        clustered_entities.append(entity_copy)
-    
-    # Créer un résumé des clusters
-    clusters_summary = []
-    for cluster_id in range(n_clusters):
-        cluster_entities = [e for e in clustered_entities if e['cluster'] == cluster_id]
-        cluster_texts = [e['text'] for e in cluster_entities]
-        cluster_labels = [e['label'] for e in cluster_entities]
+    try:
+        # Extraire les textes
+        texts = [entity['text'] for entity in entities]
         
-        clusters_summary.append({
-            'cluster_id': cluster_id,
-            'size': len(cluster_entities),
-            'entities': cluster_texts,
-            'dominant_label': max(set(cluster_labels), key=cluster_labels.count),
-            'avg_confidence': np.mean([e['confidence'] for e in cluster_entities])
-        })
+        # Calculer les embeddings
+        embeddings = embedding_model.encode(texts)
+        
+        # Clustering hiérarchique
+        if n_clusters is None:
+            # Déterminer automatiquement le nombre de clusters
+            n_clusters = min(max(2, len(entities) // 3), 10)
+        
+        clustering = AgglomerativeClustering(
+            n_clusters=n_clusters, 
+            metric='cosine', 
+            linkage='average'
+        )
+        
+        cluster_labels = clustering.fit_predict(embeddings)
+        
+        # Ajouter les labels de cluster aux entités
+        clustered_entities = []
+        for entity, cluster_id in zip(entities, cluster_labels):
+            entity_copy = entity.copy()
+            entity_copy['cluster'] = int(cluster_id)
+            clustered_entities.append(entity_copy)
+        
+        # Créer un résumé des clusters
+        clusters_summary = []
+        for cluster_id in range(n_clusters):
+            cluster_entities = [e for e in clustered_entities if e['cluster'] == cluster_id]
+            cluster_texts = [e['text'] for e in cluster_entities]
+            cluster_labels = [e['label'] for e in cluster_entities]
+            
+            clusters_summary.append({
+                'cluster_id': cluster_id,
+                'size': len(cluster_entities),
+                'entities': cluster_texts,
+                'dominant_label': max(set(cluster_labels), key=cluster_labels.count) if cluster_labels else "UNKNOWN",
+                'avg_confidence': np.mean([e['confidence'] for e in cluster_entities])
+            })
+        
+        return clustered_entities, clusters_summary
     
-    return clustered_entities, clusters_summary
+    except Exception as e:
+        st.error(f"Erreur clustering: {e}")
+        return entities, []
 
 # --------------------------
 # Interface Streamlit
@@ -377,23 +472,23 @@ def main():
     # Sélection des méthodes
     st.sidebar.subheader("Méthodes d'extraction")
     use_regex = st.sidebar.checkbox("Regex", value=True)
-    use_spacy = st.sidebar.checkbox("spaCy", value=True)
-    use_camembert = st.sidebar.checkbox("CamemBERT", value=True)
-    use_flair = st.sidebar.checkbox("Flair", value=True)
-    use_embeddings = st.sidebar.checkbox("Embeddings sémantiques", value=False)
+    use_spacy = st.sidebar.checkbox("spaCy", value=HAS_SPACY and nlp_spacy is not None)
+    use_camembert = st.sidebar.checkbox("CamemBERT", value=HAS_TRANSFORMERS and camembert_ner is not None)
+    use_flair = st.sidebar.checkbox("Flair", value=HAS_FLAIR and flair_tagger is not None)
+    use_embeddings = st.sidebar.checkbox("Embeddings sémantiques", value=HAS_SENTENCE_TRANSFORMERS and embedding_model is not None)
     
     # Paramètres de fusion et clustering
     st.sidebar.subheader("Paramètres")
     merge_threshold = st.sidebar.slider("Seuil de fusion", 0.5, 1.0, 0.8, 0.05)
     embedding_threshold = st.sidebar.slider("Seuil similarité embeddings", 0.5, 1.0, 0.75, 0.05)
-    enable_clustering = st.sidebar.checkbox("Activer le clustering", value=True)
+    enable_clustering = st.sidebar.checkbox("Activer le clustering", value=HAS_SENTENCE_TRANSFORMERS and embedding_model is not None)
     n_clusters = st.sidebar.number_input("Nombre de clusters (auto si 0)", 0, 20, 0)
     
     # Zone principale
     st.header("📝 Saisie du texte")
     
     # Options d'entrée
-    input_method = st.radio("Source du texte:", ["Texte direct", "URL web"])
+    input_method = st.radio("Source du texte:", ["Texte direct", "URL web"] if HAS_TRAFILATURA else ["Texte direct"])
     
     text_content = ""
     
@@ -401,7 +496,7 @@ def main():
         text_content = st.text_area("Entrez votre texte:", height=200, 
                                    placeholder="Copiez-collez votre texte ici...")
     
-    elif input_method == "URL web":
+    elif input_method == "URL web" and HAS_TRAFILATURA:
         url = st.text_input("URL de la page web:")
         if url and st.button("Extraire le contenu"):
             with st.spinner("Extraction du contenu web..."):
@@ -433,7 +528,7 @@ def main():
                             st.json(regex_entities[:3])  # Afficher les 3 premières
                         all_entities.extend(regex_entities)
                 
-                if use_spacy:
+                if use_spacy and nlp_spacy:
                     with st.expander("🤖 spaCy"):
                         spacy_entities = extract_with_spacy(text_content)
                         st.write(f"Trouvé {len(spacy_entities)} entités")
@@ -441,7 +536,7 @@ def main():
                             st.json(spacy_entities[:3])
                         all_entities.extend(spacy_entities)
                 
-                if use_camembert:
+                if use_camembert and camembert_ner:
                     with st.expander("🥖 CamemBERT"):
                         camembert_entities = extract_with_camembert(text_content)
                         st.write(f"Trouvé {len(camembert_entities)} entités")
@@ -450,7 +545,7 @@ def main():
                         all_entities.extend(camembert_entities)
             
             with col2:
-                if use_flair:
+                if use_flair and flair_tagger:
                     with st.expander("⚡ Flair"):
                         flair_entities = extract_with_flair(text_content)
                         st.write(f"Trouvé {len(flair_entities)} entités")
@@ -458,7 +553,7 @@ def main():
                             st.json(flair_entities[:3])
                         all_entities.extend(flair_entities)
                 
-                if use_embeddings:
+                if use_embeddings and embedding_model:
                     with st.expander("🧠 Embeddings"):
                         embedding_entities = extract_with_embeddings(text_content, embedding_threshold)
                         st.write(f"Trouvé {len(embedding_entities)} entités")
@@ -481,7 +576,7 @@ def main():
                 st.metric("Réduction", f"{reduction}%")
             
             # Clustering sémantique
-            if enable_clustering and merged_entities:
+            if enable_clustering and merged_entities and embedding_model:
                 st.header("🧠 Clustering sémantique")
                 
                 n_clusters_final = n_clusters if n_clusters > 0 else None
@@ -545,26 +640,4 @@ def main():
                     st.bar_chart(label_counts)
                 
                 with col2:
-                    st.subheader("Distribution de confiance")
-                    st.histogram_chart(filtered_df['confidence'].values, bins=20)
-                
-                # Export
-                st.subheader("💾 Export")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    csv_data = filtered_df.to_csv(index=False)
-                    st.download_button("Télécharger CSV", csv_data, "entites.csv", "text/csv")
-                
-                with col2:
-                    json_data = filtered_df.to_json(orient='records', indent=2)
-                    st.download_button("Télécharger JSON", json_data, "entites.json", "application/json")
-            
-            else:
-                st.warning("Aucune entité trouvée avec les paramètres actuels.")
-        
-        else:
-            st.warning("Aucune entité détectée dans le texte.")
-
-if __name__ == "__main__":
-    main()
+                    st.subheader("Distribution de
