@@ -1,5 +1,4 @@
 import re
-import io
 import json
 import numpy as np
 import pandas as pd
@@ -14,27 +13,12 @@ except ImportError:
     st.error("Trafilatura non disponible")
 
 try:
-    import spacy
-    HAS_SPACY = True
-except ImportError:
-    HAS_SPACY = False
-    st.error("spaCy non disponible")
-
-try:
     from transformers import AutoTokenizer, AutoModelForTokenClassification
     from transformers import pipeline as hf_pipeline
     HAS_TRANSFORMERS = True
 except ImportError:
     HAS_TRANSFORMERS = False
     st.error("Transformers non disponible")
-
-try:
-    from flair.data import Sentence
-    from flair.models import SequenceTagger
-    HAS_FLAIR = True
-except ImportError:
-    HAS_FLAIR = False
-    st.error("Flair non disponible")
 
 try:
     from sentence_transformers import SentenceTransformer, util
@@ -47,10 +31,10 @@ except ImportError:
 # --------------------------
 # Config Streamlit
 # --------------------------
-st.set_page_config(page_title="Extraction & Clustering d'entités nommées", layout="wide")
-st.title("🔍 Extraction d'entités nommées (5 méthodes) + 🧠 Clustering sémantique")
+st.set_page_config(page_title="Extraction d'entités nommées", layout="wide")
+st.title("🔍 Extraction d'entités nommées (NER) multi-méthodes")
 st.markdown(
-    "Cette app extrait les entités depuis des pages web via **Regex**, **spaCy**, **CamemBERT**, **Flair**, "
+    "Cette app extrait les entités depuis des pages web via **Regex**, **CamemBERT**, "
     "**Embeddings sémantiques**, puis **fusionne et regroupe** les entités par **similarité sémantique**."
 )
 
@@ -58,12 +42,8 @@ st.markdown(
 missing_deps = []
 if not HAS_TRAFILATURA:
     missing_deps.append("trafilatura")
-if not HAS_SPACY:
-    missing_deps.append("spacy")
 if not HAS_TRANSFORMERS:
     missing_deps.append("transformers")
-if not HAS_FLAIR:
-    missing_deps.append("flair")
 if not HAS_SENTENCE_TRANSFORMERS:
     missing_deps.append("sentence-transformers")
 
@@ -73,16 +53,6 @@ if missing_deps:
 # --------------------------
 # Modèles (mis en cache)
 # --------------------------
-@st.cache_resource
-def load_spacy():
-    if not HAS_SPACY:
-        return None
-    try:
-        return spacy.load("fr_core_news_lg")
-    except Exception as e:
-        st.error(f"Erreur lors du chargement de spaCy: {e}")
-        return None
-
 @st.cache_resource
 def load_camembert():
     if not HAS_TRANSFORMERS:
@@ -97,30 +67,17 @@ def load_camembert():
         return None
 
 @st.cache_resource
-def load_flair():
-    if not HAS_FLAIR:
-        return None
-    try:
-        return SequenceTagger.load("ner")
-    except Exception as e:
-        st.error(f"Erreur lors du chargement de Flair: {e}")
-        return None
-
-@st.cache_resource
 def load_embeddings_model():
     if not HAS_SENTENCE_TRANSFORMERS:
         return None
     try:
-        # Modèle plus léger pour éviter les problèmes de mémoire
         return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     except Exception as e:
         st.error(f"Erreur lors du chargement du modèle d'embeddings: {e}")
         return None
 
 # Chargement des modèles
-nlp_spacy = load_spacy()
 camembert_ner = load_camembert()
-flair_tagger = load_flair()
 embedding_model = load_embeddings_model()
 
 # --------------------------
@@ -134,8 +91,8 @@ def extract_with_regex(text):
     # Patterns regex pour différents types d'entités
     patterns = {
         "PERSON": [
-            r'\b[A-ZÀ-ÿ][a-zà-ÿ]+\s+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]+)?',  # Noms propres
-            r'\b(?:M\.|Mme|Dr|Prof\.)\s+[A-ZÀ-ÿ][a-zà-ÿ]+',  # Titres + noms
+            r'\b[A-ZÀ-ÿ][a-zà-ÿ]+\s+[A-ZÀ-ÿ][a-zà-ÿ]+(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]+)?',
+            r'\b(?:M\.|Mme|Dr|Prof\.)\s+[A-ZÀ-ÿ][a-zà-ÿ]+',
         ],
         "ORG": [
             r'\b[A-ZÀ-ÿ][a-zà-ÿ]*(?:\s+[A-ZÀ-ÿ][a-zà-ÿ]*)*\s+(?:SA|SAS|SARL|EURL|SNC|GIE)',
@@ -143,10 +100,10 @@ def extract_with_regex(text):
         ],
         "LOC": [
             r'\b(?:Paris|Lyon|Marseille|Toulouse|Nice|Nantes|Strasbourg|Montpellier|Bordeaux|Lille)',
-            r'\b[A-ZÀ-ÿ][a-zà-ÿ]*(?:-[A-ZÀ-ÿ][a-zà-ÿ]*)*(?:\s+sur\s+[A-ZÀ-ÿ][a-zà-ÿ]*)?',  # Villes composées
+            r'\b[A-ZÀ-ÿ][a-zà-ÿ]*(?:-[A-ZÀ-ÿ][a-zà-ÿ]*)*(?:\s+sur\s+[A-ZÀ-ÿ][a-zà-ÿ]*)?',
         ],
         "DATE": [
-            r'\b\d{1,2}(?:/|-)\d{1,2}(?:/|-)\d{2,4}',  # Dates numériques
+            r'\b\d{1,2}(?:/|-)\d{1,2}(?:/|-)\d{2,4}',
             r'\b\d{1,2}\s+(?:janvier|février|mars|avril|mai|juin|juillet|août|septembre|octobre|novembre|décembre)\s+\d{2,4}',
         ],
         "EMAIL": [
@@ -167,35 +124,11 @@ def extract_with_regex(text):
                     "label": entity_type,
                     "start": match.start(),
                     "end": match.end(),
-                    "confidence": 0.8,  # Score arbitraire pour regex
+                    "confidence": 0.8,
                     "method": "Regex"
                 })
     
     return entities
-
-def extract_with_spacy(text):
-    """Extraction avec spaCy"""
-    if not nlp_spacy:
-        return []
-    
-    try:
-        doc = nlp_spacy(text)
-        entities = []
-        
-        for ent in doc.ents:
-            entities.append({
-                "text": ent.text,
-                "label": ent.label_,
-                "start": ent.start_char,
-                "end": ent.end_char,
-                "confidence": 0.9,  # spaCy ne fournit pas toujours un score
-                "method": "spaCy"
-            })
-        
-        return entities
-    except Exception as e:
-        st.error(f"Erreur spaCy: {e}")
-        return []
 
 def extract_with_camembert(text):
     """Extraction avec CamemBERT"""
@@ -224,36 +157,6 @@ def extract_with_camembert(text):
         return entities
     except Exception as e:
         st.error(f"Erreur CamemBERT: {e}")
-        return []
-
-def extract_with_flair(text):
-    """Extraction avec Flair"""
-    if not flair_tagger:
-        return []
-    
-    try:
-        # Limiter la taille du texte
-        max_length = 512
-        if len(text) > max_length:
-            text = text[:max_length]
-        
-        sentence = Sentence(text)
-        flair_tagger.predict(sentence)
-        entities = []
-        
-        for entity in sentence.get_spans('ner'):
-            entities.append({
-                "text": entity.text,
-                "label": entity.tag,
-                "start": entity.start_position,
-                "end": entity.end_position,
-                "confidence": float(entity.score),
-                "method": "Flair"
-            })
-        
-        return entities
-    except Exception as e:
-        st.error(f"Erreur Flair: {e}")
         return []
 
 def extract_with_embeddings(text, similarity_threshold=0.75):
@@ -327,82 +230,39 @@ def merge_entities(all_entities, similarity_threshold=0.8):
     # Supprimer les doublons exacts
     df = df.drop_duplicates(subset=['text', 'label'])
     
-    # Regrouper par similarité textuelle simple
+    # Simple regroupement par texte identique
     merged_entities = []
-    processed_indices = set()
+    processed_texts = set()
     
-    for i, entity in df.iterrows():
-        if i in processed_indices:
+    for _, entity in df.iterrows():
+        if entity['text'] in processed_texts:
             continue
             
-        similar_group = [entity]
+        # Chercher des entités avec le même texte
+        similar = df[df['text'] == entity['text']]
         
-        # Chercher des entités similaires
-        for j, other_entity in df.iterrows():
-            if j <= i or j in processed_indices:
-                continue
-                
-            # Similarité textuelle simple
-            text_similarity = calculate_text_similarity(entity['text'], other_entity['text'])
+        if len(similar) > 1:
+            # Fusionner les méthodes
+            methods = ', '.join(similar['method'].unique())
+            avg_confidence = similar['confidence'].mean()
             
-            # Si suffisamment similaire, grouper
-            if text_similarity > similarity_threshold and entity['label'] == other_entity['label']:
-                similar_group.append(other_entity)
-                processed_indices.add(j)
+            merged_entity = {
+                'text': entity['text'],
+                'label': entity['label'],
+                'start': entity['start'],
+                'end': entity['end'],
+                'confidence': avg_confidence,
+                'method': methods,
+                'detection_count': len(similar)
+            }
+        else:
+            merged_entity = entity.to_dict()
+            merged_entity['detection_count'] = 1
         
-        # Créer une entité fusionnée
-        merged_entity = create_merged_entity(similar_group)
         merged_entities.append(merged_entity)
-        processed_indices.add(i)
+        processed_texts.add(entity['text'])
     
     return merged_entities
-
-def calculate_text_similarity(text1, text2):
-    """Calcule la similarité textuelle simple"""
-    text1, text2 = text1.lower(), text2.lower()
-    
-    if text1 == text2:
-        return 1.0
-    
-    # Similarité par mots communs
-    words1 = set(text1.split())
-    words2 = set(text2.split())
-    
-    if not words1 or not words2:
-        return 0.0
-    
-    intersection = words1.intersection(words2)
-    union = words1.union(words2)
-    
-    return len(intersection) / len(union) if union else 0.0
-
-def create_merged_entity(entity_group):
-    """Crée une entité fusionnée à partir d'un groupe d'entités similaires"""
-    if len(entity_group) == 1:
-        return entity_group[0].to_dict() if hasattr(entity_group[0], 'to_dict') else entity_group[0]
-    
-    # Prendre l'entité avec la meilleure confiance comme base
-    best_entity = max(entity_group, key=lambda x: x['confidence'] if isinstance(x, dict) else x.confidence)
-    
-    if hasattr(best_entity, 'to_dict'):
-        merged = best_entity.to_dict()
-    else:
-        merged = dict(best_entity)
-    
-    # Agréger les méthodes utilisées
-    methods = []
-    total_confidence = 0
-    
-    for entity in entity_group:
-        ent_dict = entity if isinstance(entity, dict) else entity.to_dict()
-        methods.append(ent_dict['method'])
-        total_confidence += ent_dict['confidence']
-    
-    merged['method'] = ', '.join(set(methods))
-    merged['confidence'] = total_confidence / len(entity_group)  # Moyenne
-    merged['detection_count'] = len(entity_group)
-    
-    return merged
 
 # --------------------------
 # Clustering sémantique
@@ -422,7 +282,6 @@ def cluster_entities(entities, n_clusters=None):
         
         # Clustering hiérarchique
         if n_clusters is None:
-            # Déterminer automatiquement le nombre de clusters
             n_clusters = min(max(2, len(entities) // 3), 10)
         
         clustering = AgglomerativeClustering(
@@ -472,9 +331,7 @@ def main():
     # Sélection des méthodes
     st.sidebar.subheader("Méthodes d'extraction")
     use_regex = st.sidebar.checkbox("Regex", value=True)
-    use_spacy = st.sidebar.checkbox("spaCy", value=HAS_SPACY and nlp_spacy is not None)
     use_camembert = st.sidebar.checkbox("CamemBERT", value=HAS_TRANSFORMERS and camembert_ner is not None)
-    use_flair = st.sidebar.checkbox("Flair", value=HAS_FLAIR and flair_tagger is not None)
     use_embeddings = st.sidebar.checkbox("Embeddings sémantiques", value=HAS_SENTENCE_TRANSFORMERS and embedding_model is not None)
     
     # Paramètres de fusion et clustering
@@ -525,16 +382,8 @@ def main():
                         regex_entities = extract_with_regex(text_content)
                         st.write(f"Trouvé {len(regex_entities)} entités")
                         if regex_entities:
-                            st.json(regex_entities[:3])  # Afficher les 3 premières
+                            st.json(regex_entities[:3])
                         all_entities.extend(regex_entities)
-                
-                if use_spacy and nlp_spacy:
-                    with st.expander("🤖 spaCy"):
-                        spacy_entities = extract_with_spacy(text_content)
-                        st.write(f"Trouvé {len(spacy_entities)} entités")
-                        if spacy_entities:
-                            st.json(spacy_entities[:3])
-                        all_entities.extend(spacy_entities)
                 
                 if use_camembert and camembert_ner:
                     with st.expander("🥖 CamemBERT"):
@@ -545,14 +394,6 @@ def main():
                         all_entities.extend(camembert_entities)
             
             with col2:
-                if use_flair and flair_tagger:
-                    with st.expander("⚡ Flair"):
-                        flair_entities = extract_with_flair(text_content)
-                        st.write(f"Trouvé {len(flair_entities)} entités")
-                        if flair_entities:
-                            st.json(flair_entities[:3])
-                        all_entities.extend(flair_entities)
-                
                 if use_embeddings and embedding_model:
                     with st.expander("🧠 Embeddings"):
                         embedding_entities = extract_with_embeddings(text_content, embedding_threshold)
@@ -640,4 +481,26 @@ def main():
                     st.bar_chart(label_counts)
                 
                 with col2:
-                    st.subheader("Distribution de
+                    st.subheader("Distribution de confiance")
+                    st.histogram_chart(filtered_df['confidence'].values, bins=20)
+                
+                # Export
+                st.subheader("💾 Export")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    csv_data = filtered_df.to_csv(index=False)
+                    st.download_button("Télécharger CSV", csv_data, "entites.csv", "text/csv")
+                
+                with col2:
+                    json_data = filtered_df.to_json(orient='records', indent=2)
+                    st.download_button("Télécharger JSON", json_data, "entites.json", "application/json")
+            
+            else:
+                st.warning("Aucune entité trouvée avec les paramètres actuels.")
+        
+        else:
+            st.warning("Aucune entité détectée dans le texte.")
+
+if __name__ == "__main__":
+    main()
