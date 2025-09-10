@@ -7,7 +7,8 @@ import trafilatura
 import streamlit as st
 
 import spacy
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForTokenClassification
+from transformers import pipeline as hf_pipeline
 from flair.data import Sentence
 from flair.models import SequenceTagger
 
@@ -33,7 +34,10 @@ def load_spacy():
 
 @st.cache_resource
 def load_camembert():
-    return pipeline("ner", model="Jean-Baptiste/camembert-ner", grouped_entities=True)
+    model_name = "Jean-Baptiste/camembert-ner"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForTokenClassification.from_pretrained(model_name)
+    return hf_pipeline("ner", model=model, tokenizer=tokenizer, grouped_entities=True)
 
 @st.cache_resource
 def load_flair():
