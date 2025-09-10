@@ -30,7 +30,7 @@ st.markdown(
 # --------------------------
 @st.cache_resource
 def load_spacy():
-    return spacy.load("fr_core_news_md")
+    return spacy.load("fr_core_news_lg")
 
 @st.cache_resource
 def load_camembert():
